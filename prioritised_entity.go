@@ -1,12 +1,13 @@
-package resourceprioritise
+package resourceprioritize
 
 import (
+	"context"
 	"sync"
 	"time"
 )
 
-// PrioritisedEntity interface
-type PrioritisedEntity interface {
+// PrioritizedEntity interface
+type PrioritizedEntity interface {
 	GetPriority() int
 	AccessResource(interface{})
 }
@@ -15,21 +16,17 @@ type PrioritisedEntity interface {
 type GreedyMutex struct {
 	sync.Mutex
 	TimeToWait time.Duration
+	queue      chan PrioritizedEntity
 }
 
-var (
-	mux   *GreedyMutex
-	queue chan PrioritisedEntity
-)
-
 // Compete compete for resource
-func Compete(resource interface{}) {
+func (mux *GreedyMutex) Compete(ctx context.Context, resource interface{}) {
 	mux.Lock()
-	greedyEntities := []PrioritisedEntity{}
-	defer func() { go Compete(resource) }()
+	greedyEntities := []PrioritizedEntity{}
+	defer func() { go mux.Compete(ctx, resource) }()
 	defer mux.Unlock()
 	defer func() {
-		var winner PrioritisedEntity
+		var winner PrioritizedEntity
 		for _, entity := range greedyEntities {
 			if winner == nil || winner.GetPriority() < entity.GetPriority() {
 				winner = entity
@@ -40,15 +37,17 @@ func Compete(resource interface{}) {
 		}
 	}()
 	// wait until have a request for resource
-	entity := <-queue
+	entity := <-mux.queue
 	greedyEntities = append(greedyEntities, entity)
 	c := time.NewTicker(mux.TimeToWait)
 	for {
 		select {
+		case <-ctx.Done():
+			return
 		case <-c.C:
 			c.Stop()
 			return
-		case entity := <-queue:
+		case entity := <-mux.queue:
 			greedyEntities = append(greedyEntities, entity)
 		}
 	}
